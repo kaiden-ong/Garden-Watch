@@ -2,36 +2,56 @@ import cv2
 import numpy as np
 import pyaudio
 import wave
+import time
+import threading
 
 # Play audio file function
 def play_audio(file):
-    chunk = 1024
-    wf = wave.open(file, 'rb')
-    device_name = "Speakers (JBL Go 3 Stereo)"
-    index = 0
+    global audio_playing
+    def audio_thread(file):
+        global audio_playing
+        chunk = 1024
+        wf = wave.open(file, 'rb')
+        device_name = "Speakers (JBL Go 3 Stereo)"
+        index = None
 
-    p = pyaudio.PyAudio()    
+        p = pyaudio.PyAudio()
 
-    for i in range(p.get_device_count()):
-        device_info = p.get_device_info_by_index(i)
-        if device_info.get('name') == device_name and device_info.get('maxOutputChannels') == 2:
-            index = i
-            break
+        for i in range(p.get_device_count()):
+            device_info = p.get_device_info_by_index(i)
+            if device_info.get('name') == device_name and device_info.get('maxOutputChannels') == 2:
+                index = i
+                break
 
-    stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
-                    channels=wf.getnchannels(),
-                    rate=wf.getframerate(),
-                    output=True,
-                    output_device_index=index)
+        if index is None:
+            print(f"Motion Detected... Device {device_name} not found.")
+            return
 
-    data = wf.readframes(chunk)
-    while data != b'':
-        stream.write(data)
+        stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
+                        channels=wf.getnchannels(),
+                        rate=wf.getframerate(),
+                        output=True,
+                        output_device_index=index)
+
         data = wf.readframes(chunk)
+        while data != b'':
+            stream.write(data)
+            data = wf.readframes(chunk)
 
-    stream.stop_stream()
-    stream.close()
-    p.terminate()
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+
+        with audio_lock:
+            audio_playing = False
+
+    # Check if audio is currently playing
+    with audio_lock:
+        if audio_playing:
+            return
+        audio_playing = True
+
+    threading.Thread(target=audio_thread, args=(file,)).start()
 
 # Selecting video area
 def select_corners(event, x, y, flags, param):
@@ -90,10 +110,18 @@ def display_frame(cap, window_name):
     button_color = (0, 0, 255)
     button_text = "Press space to reset area"
     
+    # Some cv2 algs
+    bgSubtractor = cv2.createBackgroundSubtractorMOG2(detectShadows=True)
+    hog = cv2.HOGDescriptor()
+    hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
+
+        # frame = detectMotionAndHuman(frame, bgSubtractor, hog)
+        detectHumanOnly(frame,hog)
 
         cv2.rectangle(frame, button_position, 
                       (button_position[0] + button_size[0], button_position[1] + button_size[1]),
@@ -112,16 +140,97 @@ def display_frame(cap, window_name):
             cv2.line(frame, corners[i], corners[(i + 1) % len(corners)], (0, 255, 0), 3)
 
         cv2.imshow(window_name, frame)
-
-        if cv2.waitKey(1) == ord('q'):
+        key = cv2.waitKey(1)
+        if key == ord('q'):
             break
-        elif cv2.waitKey(1) == 32:
+        elif key == 32:  # Space bar
             corners.clear()
             corners_collected = False
-            
+
+# Not in use right now           
+def detectMotion(frame, bgSubtractor):
+    fgmask = bgSubtractor.apply(frame)
+    _, thresh = cv2.threshold(fgmask, 200, 255, cv2.THRESH_BINARY)
+    thresh = cv2.erode(thresh, None)
+    thresh = cv2.dilate(thresh, None)
+
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    motionBoxes = []
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area > 1000:
+            x, y, w, h = cv2.boundingRect(cnt)
+            motionBoxes.append((x, y, w, h))
+    return motionBoxes
+
+def detectHuman(frame, hog):
+    grayFrame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+    ret,binaryFrame = cv2.threshold(frame,10,255,cv2.THRESH_BINARY)
+    boxes, weights = hog.detectMultiScale(binaryFrame, winStride=(8, 8))
+    boxes = np.array([[x, y, x + w, y + h] for (x, y, w, h) in boxes])
+    return boxes
+
+def detectMotionAndHuman(frame, bgSubtractor, hog):
+    global first_detection_time
+    motionBoxes = detectMotion(frame, bgSubtractor)
+    humanBoxes = detectHuman(frame, hog)
+
+    current_time = time.time()
+    human_detected = False
+
+    for (xA, yA, xB, yB) in humanBoxes:
+        for (mx, my, mw, mh) in motionBoxes:
+            if (xA >= mx and yA >= my and xB <= mx + mw and yB <= my + mh):
+                human_detected = True
+                cv2.rectangle(frame, (xA, yA), (xB, yB), (0, 255, 0), 2)
+                break
+        if human_detected:
+            break
+
+    if human_detected:
+        if first_detection_time is None:
+            first_detection_time = current_time
+        elif current_time - first_detection_time >= 1:
+            play_audio('./gardenwatch.wav')
+    else:
+        first_detection_time = None
+
+    return frame
+
+# Detects humans in the shot
+def detectHumanOnly(frame, hog):
+    global first_detection_time
+    current_time = time.time()
+    human_detected = False
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+    boxes, weights = hog.detectMultiScale(frame, winStride=(8,8) )
+
+    boxes = np.array([[x, y, x + w, y + h] for (x, y, w, h) in boxes])
+
+    for (xA, yA, xB, yB) in boxes:
+        # display the detected boxes in the colour picture
+        cv2.rectangle(frame, (xA, yA), (xB, yB),(0, 255, 0), 2)
+        human_detected = True
+
+    if human_detected:
+        if first_detection_time is None:
+            first_detection_time = current_time
+        elif current_time - first_detection_time >= 1:
+            play_audio('./gardenwatch.wav')
+            first_detection_time = current_time
+    else:
+        first_detection_time = None
+
+
+
 def main():
-    global corners
+    global corners, first_detection_time, audio_playing, audio_lock
     corners = []
+    first_detection_time = None
+    audio_playing = False
+    audio_lock = threading.Lock()
 
     cap = cv2.VideoCapture(0)
     window_name = 'Garden Watch'
@@ -132,10 +241,6 @@ def main():
     
     cap.release()
     cv2.destroyAllWindows()
-
-    if len(corners) == 4: print("Selected points:", corners)
-
-    play_audio('./gardenwatch.wav')
 
 if __name__ == "__main__":
     main()
