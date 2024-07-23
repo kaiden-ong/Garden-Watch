@@ -4,6 +4,16 @@ import pyaudio
 import wave
 import time
 import threading
+import sys
+import os
+
+def get_audio_path(filename):
+    if getattr(sys, 'frozen', False):
+        # If the script is running as a bundled executable
+        return os.path.join(sys._MEIPASS, filename)
+    else:
+        # If running in a development environment
+        return os.path.join(os.path.dirname(__file__), filename)
 
 # Play audio file function
 def play_audio(file):
@@ -11,7 +21,7 @@ def play_audio(file):
     def audio_thread(file):
         global audio_playing
         chunk = 1024
-        wf = wave.open(file, 'rb')
+        wf = wave.open(get_audio_path(file), 'rb')
         device_name = "Speakers (JBL Go 3 Stereo)"
         index = None
 
@@ -129,14 +139,14 @@ def display_frame(cap, window_name):
                     cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 255, 255), 1, cv2.LINE_AA)
 
         for corner in corners:
-            cv2.circle(frame, corner, 3, (0, 255, 0), -1)            
+            cv2.circle(frame, corner, 3, (0, 0, 255), -1)            
 
         if len(corners) == 4 and not corners_collected:
             order_corners()
             corners_collected = True
 
         for i in range(len(corners)):
-            cv2.line(frame, corners[i], corners[(i + 1) % len(corners)], (0, 255, 0), 3)
+            cv2.line(frame, corners[i], corners[(i + 1) % len(corners)], (0, 0, 255), 3)
         
         # frame = detectMotionAndHuman(frame, bgSubtractor, hog)
         detectHumanOnly(frame,hog)
