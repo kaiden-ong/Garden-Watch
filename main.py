@@ -19,13 +19,15 @@ def play_audio(file):
 
         for i in range(p.get_device_count()):
             device_info = p.get_device_info_by_index(i)
-            if device_info.get('name') == device_name and device_info.get('maxOutputChannels') == 2:
+            if device_info.get('name') == device_name and device_info.get('maxOutputChannels') >= 2:
                 index = i
                 break
 
         if index is None:
             print(f"Motion Detected... Device {device_name} not found.")
             return
+        else:
+            print("Human Motion Detected")
 
         stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
                         channels=wf.getnchannels(),
@@ -120,9 +122,6 @@ def display_frame(cap, window_name):
         if not ret:
             break
 
-        # frame = detectMotionAndHuman(frame, bgSubtractor, hog)
-        detectHumanOnly(frame,hog)
-
         cv2.rectangle(frame, button_position, 
                       (button_position[0] + button_size[0], button_position[1] + button_size[1]),
                       button_color, -1)
@@ -138,6 +137,9 @@ def display_frame(cap, window_name):
 
         for i in range(len(corners)):
             cv2.line(frame, corners[i], corners[(i + 1) % len(corners)], (0, 255, 0), 3)
+        
+        # frame = detectMotionAndHuman(frame, bgSubtractor, hog)
+        detectHumanOnly(frame,hog)
 
         cv2.imshow(window_name, frame)
         key = cv2.waitKey(1)
@@ -203,16 +205,26 @@ def detectHumanOnly(frame, hog):
     global first_detection_time
     current_time = time.time()
     human_detected = False
+    if len(corners) != 4:
+        gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        boxes, weights = hog.detectMultiScale(gray, winStride=(8,8), padding=(4,4), scale=1.05)
+        boxes = np.array([[x, y, x + w, y + h] for (x, y, w, h) in boxes])
+        for (xA, yA, xB, yB) in boxes:
+            cv2.rectangle(frame, (xA, yA), (xB, yB),(0, 255, 0), 2)
+            human_detected = True
+    else:
+        mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+        polygon = np.array(corners, np.int32)
+        polygon = polygon.reshape((-1, 1, 2))
+        cv2.fillPoly(mask, [polygon], 255)
+        masked_frame = cv2.bitwise_and(frame, frame, mask=mask)
 
-    gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-    boxes, weights = hog.detectMultiScale(frame, winStride=(8,8) )
-
-    boxes = np.array([[x, y, x + w, y + h] for (x, y, w, h) in boxes])
-
-    for (xA, yA, xB, yB) in boxes:
-        # display the detected boxes in the colour picture
-        cv2.rectangle(frame, (xA, yA), (xB, yB),(0, 255, 0), 2)
-        human_detected = True
+        gray = cv2.cvtColor(masked_frame, cv2.COLOR_RGB2GRAY)
+        boxes, weights = hog.detectMultiScale(gray, winStride=(8,8))
+        boxes = np.array([[x, y, x + w, y + h] for (x, y, w, h) in boxes])
+        for (xA, yA, xB, yB) in boxes:
+            cv2.rectangle(frame, (xA, yA), (xB, yB), (0, 255, 0), 2)
+            human_detected = True
 
     if human_detected:
         if first_detection_time is None:
