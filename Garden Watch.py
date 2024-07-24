@@ -153,7 +153,7 @@ def display_frame(cap, window_name):
 
         cv2.imshow(window_name, frame)
         key = cv2.waitKey(1)
-        if key == ord('q'):
+        if key == ord('q') or cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
             break
         elif key == 32:  # Space bar
             corners.clear()
