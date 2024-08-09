@@ -1,3 +1,4 @@
 build/
 dist/
 /Garden Watch.spec
+venv/

@@ -34,7 +34,7 @@ def play_audio(file):
                 break
 
         if index is None:
-            print(f"Motion Detected... Device {device_name} not found.")
+            print(f"Human Motion Detected... Device {device_name} not found.")
             return
         else:
             print("Human Motion Detected")
